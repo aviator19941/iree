@@ -31,6 +31,15 @@
 
 // -----
 
+"executable.objects"() {
+  // CHECK: data = #hal.executable.object<{data = dense<[4, 5, 6, 7]> : vector<4xi8>}>
+  data = #hal.executable.object<{data = dense<[4, 5, 6, 7]> : vector<4xi8>}>,
+  // CHECK: path = #hal.executable.object<{path = "foo"}>
+  path = #hal.executable.object<{path = "foo"}>
+} : () -> ()
+
+// -----
+
 "affinity.queue"() {
   // CHECK: any = #hal.affinity.queue<*>
   any = #hal.affinity.queue<*>,

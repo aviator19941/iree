@@ -644,6 +644,58 @@ def HAL_ExecutableTargetAttr :
 }
 
 //===----------------------------------------------------------------------===//
+// #hal.executable.object<*>
+//===----------------------------------------------------------------------===//
+
+def HAL_ExecutableObjectAttr : AttrDef<HAL_Dialect, "ExecutableObject"> {
+  let mnemonic = "executable.object";
+  let summary = [{object file reference}];
+  let description = [{
+    WIP; defines an object file that can be linked into executables.
+    Today this is only supported for external file references with paths the
+    compiler can successfully resolve from its current working directory.
+
+    Future revisions may change this to an interface that allows both internal
+    and external resources to define the object contents. Linking needs to be
+    updated to support various object compositions and certain backends may
+    require additional infrastructure support.
+
+    In the long term the goal is to allow combinations of declared objects and
+    generated code in order to give control of linking behavior to frontends.
+    Instead of needing global command line flags to link in additional blobs
+    the frontend can emit executables with the dependencies already defined per
+    variant without needing to reach into the IREE compiler code.
+
+    Example:
+    ```mlir
+    #hal.executable.object<{
+      path = "some/file.obj"
+    }>
+    ```
+  }];
+
+  let parameters = (ins
+    OptionalParameter<"StringAttr", "">:$path,
+    OptionalParameter<"DenseIntElementsAttr", "">:$data
+  );
+
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = [{
+    // Returns the absolute path of the referenced object file if it exists.
+    FailureOr<std::string> getAbsolutePath();
+
+    // Returns the contents of the object file or None if loading failed.
+    // TODO(benvanik): better return type to support mapping/etc? eh
+    Optional<std::string> loadData();
+  }];
+}
+
+def HAL_ExecutableObjectArrayAttr :
+    TypedArrayAttrBase<HAL_ExecutableObjectAttr,
+                       "HAL executable object references">;
+
+//===----------------------------------------------------------------------===//
 // #hal.affinity.queue<*>
 //===----------------------------------------------------------------------===//
 

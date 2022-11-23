@@ -210,9 +210,9 @@ static mlir::func::FuncOp cloneFuncWithInterface(
 // Annotates |dispatchOp| with resource binding to interface binding mappings.
 // TODO(benvanik): have a HAL op with structured information instead.
 static void annotateDispatchSite(IREE::Stream::CmdDispatchOp dispatchOp,
-                                 const PipelineLayout &pipelineLayout) {
+                                 const PipelineResourceMap &resourceMap) {
   SmallVector<Attribute> bindingAttrs;
-  for (auto setBinding : pipelineLayout.resourceMap) {
+  for (auto setBinding : resourceMap) {
     bindingAttrs.push_back(IREE::HAL::InterfaceBindingAttr::get(
         dispatchOp.getContext(), setBinding.first, setBinding.second));
   }
@@ -277,9 +277,12 @@ static LogicalResult declareEntryPointOps(
       variantOp.getInnerModule().push_back(targetFuncOp);
     }
 
-    // Update all dispatch sites with the binding information.
+    // Update all dispatch sites with the binding information required for
+    // conversion into the HAL dialect. By doing this here we ensure that the
+    // dialect conversion needs only local information on the ops and that it's
+    // not possible for the dispatches and their targets to get out of sync.
     for (auto dispatchOp : layoutAnalysis.getExportDispatches(exportOp)) {
-      annotateDispatchSite(dispatchOp, pipelineLayout);
+      annotateDispatchSite(dispatchOp, pipelineLayout.resourceMap);
     }
 
     baseFuncOp.erase();
@@ -442,6 +445,49 @@ class MaterializeInterfacesPass
       }
 
       sourceOp.erase();
+    }
+
+    // Do a cleanup pass for any dispatches that don't yet have interfaces
+    // assigned. If we had dispatches to externally-defined HAL executables we
+    // won't have materialized them from the stream ops above. We do expect to
+    // be able to find the dispatch targets such that we can pull out the
+    // pipeline layout, though, and any that fall through are errors.
+    auto annotateDispatchOp = [&](IREE::Stream::CmdDispatchOp dispatchOp) {
+      if (dispatchOp->hasAttr("hal.interface.bindings")) {
+        // Already have bindings defined.
+        return WalkResult::advance();
+      }
+      PipelineResourceMap resourceMap;
+      auto exportOp =
+          symbolTable.lookupNearestSymbolFrom<IREE::HAL::ExecutableExportOp>(
+              dispatchOp, dispatchOp.getEntryPointAttr());
+      if (exportOp) {
+        // Export found - we can use the pipeline layout defined there to infer
+        // the bindings. This allows for bindings to be sparse or have
+        // additional information declared.
+        for (auto setLayout : exportOp.getLayoutAttr().getSetLayouts()) {
+          for (auto binding : setLayout.getBindings()) {
+            resourceMap.emplace_back(setLayout.getOrdinal(),
+                                     binding.getOrdinal());
+          }
+        }
+      } else {
+        // No export found - this is likely an external executable and we can
+        // infer a dense pipeline layout. This is kind of shady as we may want
+        // to error in these cases where users have something special explicitly
+        // defined but then typo things but the ergonomic improvements in the
+        // normal case are worth that risk.
+        size_t resourceCount = dispatchOp.getResources().size();
+        for (int i = 0; i < resourceCount; ++i) {
+          // set=0, binding=resource ordinal
+          resourceMap.emplace_back(0, i);
+        }
+      }
+      annotateDispatchSite(dispatchOp, resourceMap);
+      return WalkResult::advance();
+    };
+    if (getOperation()->walk(annotateDispatchOp).wasInterrupted()) {
+      return signalPassFailure();
     }
   }
 };

@@ -11,6 +11,10 @@
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "iree/compiler/Utils/StringUtils.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -334,6 +338,103 @@ ExecutableTargetAttr ExecutableTargetAttr::lookup(Operation *op) {
 }
 
 //===----------------------------------------------------------------------===//
+// #hal.executable.object
+//===----------------------------------------------------------------------===//
+
+// static
+Attribute ExecutableObjectAttr::parse(AsmParser &p, Type type) {
+  NamedAttrList dict;
+  // `<{` dict `}>`
+  if (failed(p.parseLess()) || failed(p.parseOptionalAttrDict(dict)) ||
+      failed(p.parseGreater())) {
+    return {};
+  }
+  auto pathAttr = dict.get("path").dyn_cast_or_null<StringAttr>();
+  auto dataAttr = dict.get("data").dyn_cast_or_null<DenseIntElementsAttr>();
+  return get(p.getContext(), pathAttr, dataAttr);
+}
+
+void ExecutableObjectAttr::print(AsmPrinter &p) const {
+  auto &os = p.getStream();
+  os << "<{";
+  if (auto pathAttr = getPath()) {
+    os << "path = ";
+    p.printAttribute(getPath());
+  } else if (auto dataAttr = getData()) {
+    os << "data = ";
+    p.printAttribute(getData());
+  }
+  os << "}>";
+}
+
+// Tries to find |filePath| on disk either at its absolute path or joined with
+// any of the specified |searchPaths| in order.
+// Returns the absolute file path when found or a failure if there are no hits.
+static FailureOr<std::string> findFileInPaths(
+    StringRef filePath, ArrayRef<std::string> searchPaths) {
+  // First try to see if it's an absolute path - we don't want to perform any
+  // additional processing on top of that.
+  if (llvm::sys::path::is_absolute(filePath)) {
+    if (llvm::sys::fs::exists(filePath)) return filePath.str();
+    return failure();
+  }
+
+  // Try a relative lookup from the current working directory.
+  if (llvm::sys::fs::exists(filePath)) return filePath.str();
+
+  // Search each path in turn for a file that exists.
+  // It doesn't mean we can open it but we'll get a better error out of the
+  // actual open attempt than what we could produce here.
+  for (auto searchPath : searchPaths) {
+    SmallVector<char> tryPath{searchPath.begin(), searchPath.end()};
+    llvm::sys::path::append(tryPath, filePath);
+    if (llvm::sys::fs::exists(Twine(tryPath))) return Twine(tryPath).str();
+  }
+
+  // Not found in either the user-specified absolute path, cwd, or the search
+  // paths.
+  return failure();
+}
+
+static llvm::cl::list<std::string> clExecutableObjectSearchPath(
+    "iree-hal-executable-object-search-path",
+    llvm::cl::desc("Additional search paths for resolving "
+                   "#hal.executable.object file references."),
+    llvm::cl::ZeroOrMore);
+
+FailureOr<std::string> ExecutableObjectAttr::getAbsolutePath() {
+  auto pathAttr = getPath();
+  if (!pathAttr) return failure();  // not a file reference
+  return findFileInPaths(pathAttr.getValue(), clExecutableObjectSearchPath);
+}
+
+Optional<std::string> ExecutableObjectAttr::loadData() {
+  if (auto dataAttr = getData()) {
+    // This is shady but so is using this feature.
+    // TODO(benvanik): figure out a way to limit the attribute to signless int8.
+    // We could share the attribute -> byte array code with the VM constant
+    // serialization if we wanted.
+    auto rawData = dataAttr.getRawData();
+    return std::string(rawData.data(), rawData.size());
+  } else if (auto pathAttr = getPath()) {
+    // Search for file and try to load it if found.
+    auto filePath =
+        findFileInPaths(pathAttr.getValue(), clExecutableObjectSearchPath);
+    if (failed(filePath)) {
+      llvm::errs()
+          << "ERROR: referenced object file not found on any path; use "
+             "--iree-hal-executable-object-search-path= to add search paths: "
+          << *this << "\n";
+      return None;
+    }
+    auto file = llvm::MemoryBuffer::getFile(*filePath);
+    if (!file) return None;
+    return std::string((*file)->getBuffer());
+  }
+  return None;
+}
+
+//===----------------------------------------------------------------------===//
 // #hal.affinity.queue
 //===----------------------------------------------------------------------===//
 
@@ -632,6 +733,9 @@ Value DeviceMatchExecutableFormatAttr::buildConditionExpression(
 #include "iree/compiler/Dialect/HAL/IR/HALTypeInterfaces.cpp.inc"
 
 void HALDialect::registerAttributes() {
+  // Register command line flags:
+  (void)clExecutableObjectSearchPath;
+
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "iree/compiler/Dialect/HAL/IR/HALAttrs.cpp.inc"  // IWYU pragma: keep
