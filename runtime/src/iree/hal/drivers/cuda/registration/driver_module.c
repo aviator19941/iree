@@ -11,6 +11,7 @@
 
 #include "iree/base/api.h"
 #include "iree/base/internal/flags.h"
+#include "iree/base/internal/path.h"
 #include "iree/base/tracing.h"
 #include "iree/hal/drivers/cuda/api.h"
 
@@ -39,6 +40,26 @@ static iree_status_t iree_hal_cuda_driver_factory_enumerate(
   return iree_ok_status();
 }
 
+static iree_string_view_t* get_driver_names(iree_string_view_t driver_names, iree_host_size_t num_drivers) {
+  iree_string_view_t* drivers = malloc(num_drivers * sizeof(iree_string_view_t));
+  printf("PARSE_CUDA_FROM_DRIVER_NAME: %s\n", driver_names.data);
+  // insert driver_name into driver
+  char* name_str;
+  for (int i = 0; i < num_drivers; i++) {
+    iree_string_view_t key_value;
+    iree_string_view_split(driver_names, ',', &key_value, &driver_names);
+    name_str = (char*) malloc((key_value.size) * sizeof(char));
+    memset(name_str, '\0', (key_value.size) * sizeof(char));
+    strncpy(name_str, key_value.data, key_value.size);
+    printf("name_str: %s, %zu\n", name_str, strlen(name_str));
+    drivers[i] = iree_string_view_trim(iree_make_string_view(
+      name_str, strlen(name_str)));
+    printf("DRIVERS[%d]: %s, %zu\n", i, drivers[i].data, drivers[i].size);
+  }
+
+  return drivers;
+}
+
 static iree_status_t iree_hal_cuda_driver_factory_try_create(
     void* self, iree_string_view_t driver_name, iree_allocator_t host_allocator,
     iree_hal_driver_t** out_driver) {
@@ -50,6 +71,9 @@ static iree_status_t iree_hal_cuda_driver_factory_try_create(
                             (int)driver_name.size, driver_name.data);
   }
   IREE_TRACE_ZONE_BEGIN(z0);
+  printf("DRIVER NAME: %s\n", driver_name.data);
+  //iree_string_view_t uri = iree_string_view_trim(iree_make_string_view(
+  //    driver_name.data, strlen(driver_name.data)));  
 
   iree_hal_cuda_device_params_t default_params;
   iree_hal_cuda_device_params_initialize(&default_params);
@@ -62,6 +86,8 @@ static iree_status_t iree_hal_cuda_driver_factory_try_create(
   iree_hal_cuda_driver_options_t driver_options;
   iree_hal_cuda_driver_options_initialize(&driver_options);
   driver_options.default_device_index = FLAG_cuda_default_index;
+  // device=cuda://all -> call list_devices=cuda
+  // store all devices in array in driver_options
 
   iree_status_t status =
       iree_hal_cuda_driver_create(driver_name, &default_params, &driver_options,
