@@ -235,6 +235,8 @@ static iree_status_t iree_hal_cuda_driver_query_available_devices(
     }
   }
   printf("valid_device_count: %d\n", valid_device_count);
+  printf("device 0: %s\n", device_infos[0].path.data);
+  printf("device 1: %s\n", device_infos[1].path.data);
   if (iree_status_is_ok(status)) {
     *out_device_info_count = valid_device_count;
     *out_device_infos = device_infos;
@@ -411,8 +413,20 @@ static iree_status_t iree_hal_cuda_driver_create_all_devices(
   
   printf("device count: %zu!!!!!\n", device_count);
   for (int i = 0; i < device_count; i++) {
-    printf("device infos: %zu | %s\n", device_infos[i].device_id, device_infos[i].name.data);
+    int path_size = device_infos[i].path.size;
+    char* path_str = (char*) malloc((path_size + 1) * sizeof(char)); // copy device_infos[i].path.size characters into path_str from device_infos[i].path
+    memset(path_str, '\0', path_size + 1);
+    strncpy(path_str, device_infos[i].path.data, path_size);
+    printf("PATH STR: %s\n", path_str);
+    device_infos[i].path = iree_string_view_trim(iree_make_string_view(
+      path_str, path_size));
+    printf("device infos: %zu | %s | %zu\n", device_infos[i].device_id, device_infos[i].path.data, device_infos[i].path.size);
+    // TODO: iree_hal_cuda_driver_create_devices_by_index
+    return iree_hal_cuda_driver_create_device_by_index(
+        base_driver, driver_name, i, param_count, params,
+        host_allocator, out_device);
   }
+  // TODO: iree_hal_cuda_devices_create_internal
 
   return iree_ok_status();
 }
@@ -451,7 +465,6 @@ static iree_status_t iree_hal_cuda_driver_create_device_by_path(
   char* all_devices = "all";
   iree_string_view_t all_devices_path = iree_string_view_trim(iree_make_string_view(
       all_devices, strlen(all_devices)));
-  printf("all: %lu\n", strlen(all_devices));
   if (!iree_string_view_equal(device_path, all_devices_path)) {
     if (iree_string_view_atoi_int32(device_path, &device_index)) {
       return iree_hal_cuda_driver_create_device_by_index(
