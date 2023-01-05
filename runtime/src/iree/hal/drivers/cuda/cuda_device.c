@@ -48,7 +48,8 @@ typedef struct iree_hal_cuda_device_t {
   CUdevice* devices;
 
   // TODO: support multiple streams.
-  CUstream stream;
+  iree_host_size_t num_streams;
+  CUstream* streams;
   iree_hal_cuda_context_wrapper_t context_wrapper;
   iree_hal_allocator_t* device_allocator;
 
@@ -89,7 +90,7 @@ static iree_status_t iree_hal_cuda_device_check_params(
 static iree_status_t iree_hal_cuda_device_create_internal(
     iree_hal_driver_t* driver, iree_string_view_t identifier,
     const iree_hal_cuda_device_params_t* params, iree_host_size_t num_devices, CUdevice* cu_devices,
-    CUstream stream, CUcontext context, iree_hal_cuda_dynamic_symbols_t* syms,
+    iree_host_size_t num_streams, CUstream* streams, CUcontext context, iree_hal_cuda_dynamic_symbols_t* syms,
     iree_allocator_t host_allocator, iree_hal_device_t** out_device) {
   iree_hal_cuda_device_t* device = NULL;
   iree_host_size_t total_size = (iree_sizeof_struct(*device) * num_devices) + identifier.size;
@@ -103,8 +104,10 @@ static iree_status_t iree_hal_cuda_device_create_internal(
       identifier, &device->identifier,
       (char*)device + (iree_sizeof_struct(*device) * num_devices));
   device->params = *params;
+  device->num_devices = num_devices;
   device->devices = cu_devices;
-  device->stream = stream;
+  device->num_streams = num_streams;
+  device->streams = streams;
   device->context_wrapper.cu_context = context;
   device->context_wrapper.host_allocator = host_allocator;
   iree_arena_block_pool_initialize(params->arena_block_size, host_allocator,
@@ -112,16 +115,19 @@ static iree_status_t iree_hal_cuda_device_create_internal(
   device->context_wrapper.syms = syms;
 
   iree_status_t status = iree_hal_cuda_allocator_create(
-      (iree_hal_device_t*)device, &device->context_wrapper, num_devices, cu_devices, stream,
+      (iree_hal_device_t*)device, &device->context_wrapper, num_devices, cu_devices, num_streams, streams,
       &device->device_allocator);
 
   if (iree_status_is_ok(status) &&
       params->command_buffer_mode == IREE_HAL_CUDA_COMMAND_BUFFER_MODE_STREAM) {
-    status = iree_hal_cuda_stream_command_buffer_create(
+    for (int stream_id = 0; stream_id < num_streams; stream_id++) {
+      CUstream stream = device->streams[stream_id];
+      status = iree_hal_cuda_stream_command_buffer_create(
         (iree_hal_device_t*)device, &device->context_wrapper,
         IREE_HAL_COMMAND_BUFFER_MODE_ALLOW_INLINE_EXECUTION,
-        IREE_HAL_COMMAND_CATEGORY_ANY, /*binding_capacity=*/0, device->stream,
+        IREE_HAL_COMMAND_CATEGORY_ANY, /*binding_capacity=*/0, stream,
         /*block_pool=*/NULL, &device->stream_command_buffer);
+    }
   }
 
   if (iree_status_is_ok(status)) {
@@ -136,7 +142,7 @@ iree_status_t iree_hal_cuda_device_create(
     iree_hal_driver_t* driver, iree_string_view_t identifier,
     const iree_hal_cuda_device_params_t* params,
     iree_hal_cuda_dynamic_symbols_t* syms, iree_host_size_t num_devices, CUdevice* devices,
-    iree_allocator_t host_allocator, iree_hal_device_t** out_device) {
+    iree_host_size_t num_streams, iree_allocator_t host_allocator, iree_hal_device_t** out_device) {
   IREE_ASSERT_ARGUMENT(params);
   IREE_TRACE_ZONE_BEGIN(z0);
   IREE_RETURN_AND_END_ZONE_IF_ERROR(z0,
@@ -146,19 +152,25 @@ iree_status_t iree_hal_cuda_device_create(
       z0,
       CU_RESULT_TO_STATUS(syms, cuDevicePrimaryCtxRetain(&context, devices[0])));
   iree_status_t status = CU_RESULT_TO_STATUS(syms, cuCtxSetCurrent(context));
-  CUstream stream;
+  CUstream* streams;
+  // Allocate memory for num_streams streams
+  streams = (CUstream*) malloc(num_streams * sizeof(CUstream));
   if (iree_status_is_ok(status)) {
-    status = CU_RESULT_TO_STATUS(
-        syms, cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+    for (int stream_id = 0; stream_id < num_streams; stream_id++) {
+      status = CU_RESULT_TO_STATUS(
+        syms, cuStreamCreate(&streams[stream_id], CU_STREAM_NON_BLOCKING));
+    }
   }
   if (iree_status_is_ok(status)) {
     status = iree_hal_cuda_device_create_internal(driver, identifier, params, num_devices,
-                                                  devices, stream, context, syms,
+                                                  devices, num_streams, streams, context, syms,
                                                   host_allocator, out_device);
   }
   if (!iree_status_is_ok(status)) {
-    if (stream) {
-      syms->cuStreamDestroy(stream);
+    if (streams) {
+      for (int i = 0; i < num_streams; i++) {
+        syms->cuStreamDestroy(streams[i]);
+      }
     }
     syms->cuDevicePrimaryCtxRelease(devices[0]);
   }
@@ -174,8 +186,10 @@ static void iree_hal_cuda_device_destroy(iree_hal_device_t* base_device) {
   // There should be no more buffers live that use the allocator.
   iree_hal_command_buffer_release(device->stream_command_buffer);
   iree_hal_allocator_release(device->device_allocator);
-  CUDA_IGNORE_ERROR(device->context_wrapper.syms,
-                    cuStreamDestroy(device->stream));
+  for (int i = 0; i < device->num_streams; i++) {
+    CUDA_IGNORE_ERROR(device->context_wrapper.syms,
+                    cuStreamDestroy(device->streams[i]));
+  }
 
   iree_arena_block_pool_deinitialize(&device->block_pool);
 
@@ -250,7 +264,7 @@ static iree_status_t iree_hal_cuda_device_create_command_buffer(
     // directly route commands to a CUDA stream and let it eagerly flush.
     return iree_hal_cuda_stream_command_buffer_create(
         base_device, &device->context_wrapper, mode, command_categories,
-        binding_capacity, device->stream, &device->block_pool,
+        binding_capacity, *device->streams, &device->block_pool,
         out_command_buffer);
   }
   switch (device->params.command_buffer_mode) {
@@ -367,9 +381,11 @@ static iree_status_t iree_hal_cuda_device_queue_execute(
     } else if (iree_hal_cuda_graph_command_buffer_isa(command_buffer)) {
       CUgraphExec exec =
           iree_hal_cuda_graph_command_buffer_handle(command_buffers[i]);
-      CUDA_RETURN_IF_ERROR(device->context_wrapper.syms,
-                           cuGraphLaunch(exec, device->stream),
+      for (int i = 0; i < device->num_streams; i++) {
+        CUDA_RETURN_IF_ERROR(device->context_wrapper.syms,
+                           cuGraphLaunch(exec, device->streams[i]),
                            "cuGraphLaunch");
+      }
     } else {
       IREE_RETURN_IF_ERROR(iree_hal_deferred_command_buffer_apply(
           command_buffers[i], device->stream_command_buffer,
@@ -378,9 +394,11 @@ static iree_status_t iree_hal_cuda_device_queue_execute(
   }
   // TODO(thomasraoux): implement semaphores - for now this conservatively
   // synchronizes after every submit.
-  CUDA_RETURN_IF_ERROR(device->context_wrapper.syms,
-                       cuStreamSynchronize(device->stream),
+  for (int i = 0; i < device->num_streams; i++) {
+    CUDA_RETURN_IF_ERROR(device->context_wrapper.syms,
+                       cuStreamSynchronize(device->streams[i]),
                        "cuStreamSynchronize");
+  }
   return iree_ok_status();
 }
 

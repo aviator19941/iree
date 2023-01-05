@@ -19,7 +19,8 @@ extern "C" {
 // Create a cuda allocator.
 iree_status_t iree_hal_cuda_allocator_create(
     iree_hal_device_t* base_device, iree_hal_cuda_context_wrapper_t* context,
-    iree_host_size_t num_devices, CUdevice* devices, CUstream stream, iree_hal_allocator_t** out_allocator);
+    iree_host_size_t num_devices, CUdevice* devices, iree_host_size_t num_streams,
+    CUstream* streams, iree_hal_allocator_t** out_allocator);
 
 #ifdef __cplusplus
 }  // extern "C"

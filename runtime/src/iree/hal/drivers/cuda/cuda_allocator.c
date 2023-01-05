@@ -23,8 +23,9 @@ typedef struct iree_hal_cuda_allocator_t {
   iree_hal_device_t* base_device;
   iree_hal_cuda_context_wrapper_t* context;
   iree_host_size_t num_devices;
+  iree_host_size_t num_streams;
   CUdevice* devices;
-  CUstream stream;
+  CUstream* streams;
   bool supports_concurrent_managed_access;
 
   IREE_STATISTICS(iree_hal_allocator_statistics_t statistics;)
@@ -40,7 +41,7 @@ static iree_hal_cuda_allocator_t* iree_hal_cuda_allocator_cast(
 
 iree_status_t iree_hal_cuda_allocator_create(
     iree_hal_device_t* base_device, iree_hal_cuda_context_wrapper_t* context, iree_host_size_t num_devices,
-    CUdevice* devices, CUstream stream, iree_hal_allocator_t** out_allocator) {
+    CUdevice* devices, iree_host_size_t num_streams, CUstream* streams, iree_hal_allocator_t** out_allocator) {
   IREE_ASSERT_ARGUMENT(base_device);
   IREE_ASSERT_ARGUMENT(context);
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -79,7 +80,8 @@ iree_status_t iree_hal_cuda_allocator_create(
     allocator->context = context;
     allocator->num_devices = num_devices;
     allocator->devices = devices;
-    allocator->stream = stream;
+    allocator->num_streams = num_streams;
+    allocator->streams = streams;
     allocator->supports_concurrent_managed_access =
         supports_concurrent_managed_access != 0;
     *out_allocator = (iree_hal_allocator_t*)allocator;
@@ -218,10 +220,13 @@ static iree_status_t iree_hal_cuda_allocator_allocate_buffer(
         // Prefetch the buffer on the GPU device.
         for (int i = 0; i < allocator->num_devices; i++) {
           CUdevice device = allocator->devices[i];
-          status = CU_RESULT_TO_STATUS(
-              allocator->context->syms,
-              cuMemPrefetchAsync(device_ptr, allocation_size, device,
-                                allocator->stream));
+          for (int stream_ndx = 0; stream_ndx < allocator->num_streams; stream_ndx++) {
+            CUstream stream = allocator->streams[stream_ndx];
+            status = CU_RESULT_TO_STATUS(
+                allocator->context->syms,
+                cuMemPrefetchAsync(device_ptr, allocation_size, device,
+                                  stream));
+          }
         }
       }
       host_ptr = (void*)device_ptr;

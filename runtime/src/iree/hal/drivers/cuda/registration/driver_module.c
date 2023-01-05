@@ -21,6 +21,8 @@ IREE_FLAG(
     bool, cuda_use_streams, true,
     "Use CUDA streams for executing command buffers (instead of graphs).");
 
+IREE_FLAG(int32_t, cuda_num_streams, 1, "Number of CUDA streams to use");
+
 IREE_FLAG(bool, cuda_allow_inline_execution, false,
           "Allow command buffers to execute inline against CUDA streams when "
           "possible.");
@@ -63,6 +65,7 @@ static iree_status_t iree_hal_cuda_driver_factory_try_create(
   iree_hal_cuda_driver_options_t driver_options;
   iree_hal_cuda_driver_options_initialize(&driver_options);
   driver_options.default_device_index = FLAG_cuda_default_index;
+  driver_options.cuda_num_streams = FLAG_cuda_num_streams;
 
   iree_status_t status =
       iree_hal_cuda_driver_create(driver_name, &default_params, &driver_options,

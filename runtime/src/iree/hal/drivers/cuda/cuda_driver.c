@@ -31,6 +31,7 @@ typedef struct iree_hal_cuda_driver_t {
   iree_hal_cuda_device_params_t default_params;
   int default_device_index;
   int num_devices;
+  int num_streams;
   // CUDA symbols.
   iree_hal_cuda_dynamic_symbols_t syms;
 } iree_hal_cuda_driver_t;
@@ -67,6 +68,7 @@ static iree_status_t iree_hal_cuda_driver_create_internal(
   memcpy(&driver->default_params, default_params,
          sizeof(driver->default_params));
   driver->default_device_index = options->default_device_index;
+  driver->num_streams = options->cuda_num_streams;
 
   iree_status_t status =
       iree_hal_cuda_dynamic_symbols_initialize(host_allocator, &driver->syms);
@@ -286,7 +288,7 @@ static iree_status_t iree_hal_cuda_driver_create_device_by_id(
   // Attempt to create the device.
   iree_status_t status = iree_hal_cuda_device_create(
       base_driver, device_name, &driver->default_params, &driver->syms, device_count, devices,
-      host_allocator, out_device);
+      driver->num_streams, host_allocator, out_device);
 
   IREE_TRACE_ZONE_END(z0);
   return status;
@@ -402,7 +404,7 @@ static iree_status_t iree_hal_cuda_driver_create_all_devices(
   // Attempt to create the device.
   iree_status_t status = iree_hal_cuda_device_create(
       base_driver, device_name, &driver->default_params, &driver->syms, device_count, devices,
-      host_allocator, out_device);
+      driver->num_streams, host_allocator, out_device);
 
   IREE_TRACE_ZONE_END(z0);
   return status;

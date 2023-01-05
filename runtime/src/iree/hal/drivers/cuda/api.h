@@ -59,6 +59,7 @@ typedef struct iree_hal_cuda_driver_options_t {
   // Index of the default CUDA device to use within the list of available
   // devices.
   int default_device_index;
+  int cuda_num_streams;
 } iree_hal_cuda_driver_options_t;
 
 IREE_API_EXPORT void iree_hal_cuda_driver_options_initialize(
