@@ -677,8 +677,8 @@ public:
     // padding.
     {
       RewritePatternSet patterns(context);
-      linalg::populateDataLayoutPropagationPatterns(
-          patterns, [](Operation *op) { return true; });
+      // linalg::populateDataLayoutPropagationPatterns(
+          // patterns, [](Operation *op) { return true; });
       if (failed(applyPatternsAndFoldGreedily(op, std::move(patterns)))) {
         return signalPassFailure();
       }

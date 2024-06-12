@@ -303,6 +303,11 @@ private:
         residualElements = 1;
       }
 
+      if (residualThreads % vectorSize != 0 &&
+          vectorSize % residualThreads != 0) {
+            llvm::outs() << "Breaking: " << *(transfer->getParentOfType<mlir::FunctionOpInterface>()) << "\n";
+      }
+
       assert((residualThreads % vectorSize == 0 ||
               vectorSize % residualThreads == 0) &&
              "dividing threads to incompatible vector");
