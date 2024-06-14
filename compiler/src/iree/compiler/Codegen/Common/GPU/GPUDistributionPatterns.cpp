@@ -153,14 +153,16 @@ struct DistributeElementwise final
     }
 
     // Replace the original op with the distributed op.
-    Operation *distributedOp = rewriter.create(
-        op->getLoc(), op->getName().getIdentifier(), operands, resultTypes);
+    Operation *distributedOp = op->clone();
+    rewriter.insert(distributedOp);
+    //Operation *distributedOp = rewriter.create(
+    //    op->getLoc(), op->getName().getIdentifier(), operands, resultTypes);
 
     // Propagate known attributes.
-    StringRef fastmathAttrName = arith::FastMathFlagsAttr::getMnemonic();
-    if (Attribute attr = op->getAttr(fastmathAttrName)) {
-      distributedOp->setAttr(fastmathAttrName, attr);
-    }
+    //StringRef fastmathAttrName = arith::FastMathFlagsAttr::getMnemonic();
+    //if (Attribute attr = op->getAttr(fastmathAttrName)) {
+    //  distributedOp->setAttr(fastmathAttrName, attr);
+    //}
 
     DistributionPattern::replaceOpWithDistributedValues(
         rewriter, op, distributedOp->getResults());
